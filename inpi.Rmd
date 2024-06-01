@@ -16,44 +16,160 @@ theme_set(theme_cpesr())
 theme_cpesr_setup(authors = "Julien Gossa", source = "https://github.com/cpesr/RFC/")
 ```
 
-## Données 
+## Search
 
 - https://www.inpi.fr/sites/default/files/Inpi_doc_tech_API_PI_v1.0_0.pdf
 
 ```{r load}
-inpi <- read.csv2("inpi.csv", dec='.') %>%
-  mutate(
-    FranceX = as.factor(case_when(
-      str_detect(str_to_upper(Mark),"(DE|EN|LA) FRANCE") ~ "[de|en|la] France",
-      str_detect(str_to_upper(Mark),"FRAN.AIS") ~ "Français[e]",
-      str_detect(str_to_upper(Mark),"FRANCE$") ~ "X France",
-      str_detect(str_to_upper(Mark),"^FRANCE") ~ "France X",
-      TRUE ~ "Autre"
-    )))
+inpi <- bind_rows(
+  read.csv2("inpi-excavator/inpi_France.csv", dec='.') %>% mutate(search = "France"),
+  read.csv2("inpi-excavator/inpi_EtatFrancais.csv", dec='.') %>% mutate(search = "EtatFrançais"),
+  read.csv2("inpi-excavator/inpi_EtablissementPublic.csv", dec='.') %>% mutate(search = "EtablissementPublic")
+) %>%
+  summarise(search = paste(search,collapse = ";"), .by = -search) %>%
+  select(where(~!all(is.na(.x)))) %>% 
+  mutate(across(c(ApplicationNumber,Mark,DEPOSANT,DEPOTIT), str_to_lower)) %>%
+  filter(!str_detect(Mark,"[iî]le.de.france")) %>%
+  filter(!str_detect(Mark,"hauts.de.france")) %>%
+  mutate(FranceX = as.factor(case_when(
+      str_detect(Mark,"[ ^](de|en|la) france") ~ "[de|en|la] France",
+      str_detect(Mark,"fran.ais") ~ "Français[e]",
+      str_detect(Mark,"france$") ~ "X France",
+      str_detect(Mark,"^france") ~ "France X",
+      str_detect(Mark,"france") ~ "Autre France",
+      TRUE ~ "Sans France"
+    ))) %>%
+  mutate(depo = paste(DEPOSANT,DEPOTIT)) %>%
+  mutate(titulaire = as.factor(case_when(
+    str_detect(depo,"[eé]tat fran[cç]ais") ~ "Etat Français",
+    str_detect(depo,"[eé]tablissement public.* industriel et commercial") ~ "EPIC",
+    str_detect(depo,"[eé]tablissement public.* scientifique, culturel") ~ "EPSCP",
+    str_detect(depo,"[eé]tablissement public.* scientifique et technologique") ~ "EPST",
+    str_detect(depo,"[eé]tablissement public de coopération intercommunale") ~ "EPCI",
+    str_detect(depo,"[eé]tablissement public.* administratif") ~ "EPA",
+    str_detect(depo,"[ée]tablissement public") ~ "Etablissement public",
+    TRUE ~ "Autre"
+  ))) 
 
-write.csv2(inpi,"inpi_plus.csv")
+write.csv2(inpi,"inpi.csv")
+
+inpiPF <- inpi %>% 
+  filter(FranceX != "Sans France") %>%
+  filter(titulaire != "Autre") 
+
+write.csv2(inpiPF,"inpi_France_Public.csv")
+
+inpiFX <- inpi %>%
+  filter(FranceX == "France X") 
+
+write.csv2(inpiFX,"inpi_FranceX.csv")
+
 
 colnames(inpi)
 ```
 
-## Explorations
-
 ```{r, results='asis'}
 inpi %>%
-  summarise(Nombre = n(), .by=FranceX) %>%
-  spoiler_table("FranceX",trim=Inf)
+  summarise(Nombre = n(), .by = FranceX) %>%
+  arrange(desc(Nombre)) %>%
+  head(15) %>%
+  spoiler_table("FranceX", trim = Inf)
 ```
 
 ```{r, results='asis'}
 inpi %>%
-  summarise(Nombre = n(), .by=MarkCurrentStatusCode) %>%
-  spoiler_table("MarkCurrentStatusCode",trim=Inf)
+  summarise(Nombre = n(), .by = titulaire) %>%
+  arrange(desc(Nombre)) %>%
+  head(15) %>%
+  spoiler_table("Titulaire", trim = Inf)
+```
+
+```{r, results='asis'}
+inpi %>%
+  summarise(Nombre = n(), .by = MarkCurrentStatusCode) %>%
+  arrange(desc(Nombre)) %>%
+  head(15) %>%
+  spoiler_table("MarkCurrentStatusCode", trim = Inf)
+```
+
+### Plots
+
+France / Marques actives
+
+```{r}
+inpi %>%
+  filter(FranceX != "Sans France") %>%
+  filter(MarkCurrentStatusCode %in% c("Marque enregistrée","Marque renouvelée")) %>%  
+  summarise(Nombre=n(), .by = titulaire) %>%
+  ggplot(aes(y=reorder(titulaire,Nombre),x=Nombre)) + geom_col()
+```
+
+France / Marques actives / Public
+
+
+```{r}
+inpi %>%
+  filter(FranceX != "Sans France") %>%
+  filter(titulaire != "Autre") %>%
+  filter(MarkCurrentStatusCode %in% c("Marque enregistrée","Marque renouvelée")) %>%  
+  summarise(Nombre=n(), .by = titulaire) %>%
+  ggplot(aes(y=reorder(titulaire,Nombre),x=Nombre)) + geom_col()
 ```
 
 ```{r}
 inpi %>%
-  mutate(Année_dépôt = as.numeric(str_sub(ApplicationDate,1,4))) %>%
-  filter(Année_dépôt < 2024) %>%
-  summarise(Nombre = n(), .by=c(FranceX,Année_dépôt)) %>%
-  ggplot(aes(x=Année_dépôt,y=Nombre,color=FranceX)) + geom_smooth(se = FALSE) + geom_point()
+  filter(FranceX != "Sans France") %>%
+  filter(titulaire != "Autre") %>%
+  filter(MarkCurrentStatusCode %in% c("Marque enregistrée","Marque renouvelée")) %>%  
+  summarise(Nombre=n(), .by = FranceX) %>%
+  ggplot(aes(y=reorder(FranceX,Nombre),x=Nombre)) + geom_col()
 ```
+
+```{r}
+inpi %>%
+  filter(FranceX != "Sans France") %>%
+  filter(titulaire != "Autre") %>%
+  filter(MarkCurrentStatusCode %in% c("Marque enregistrée","Marque renouvelée")) %>%  
+  summarise(Nombre=n(), .by = c(titulaire,FranceX)) %>%
+  ggplot(aes(y=reorder(titulaire,Nombre),x=Nombre,fill=FranceX)) + geom_col(position="fill")
+```
+
+
+## FranceX Notices
+
+```{r loadX}
+inpiFX <- read.csv2("inpi-excavator/inpi_FranceX_notices.csv", dec='.') %>%
+  mutate(across(c(Mark,ApplicationNumber,ApplicantLegalEntity,OrganizationName,AddressCity), str_to_lower))
+colnames(inpiFX)
+```
+
+```{r, results='asis'}
+inpiFX %>%
+  summarise(Nombre = n(), .by = OrganizationName) %>%
+  arrange(desc(Nombre)) %>%
+  head(15) %>%
+  spoiler_table("Top organization", trim = Inf)
+```
+
+```{r, results='asis'}
+inpiFX %>%
+  summarise(Nombre = n(), .by = IndividualIdentifier) %>%
+  arrange(desc(Nombre)) %>%
+  head(15) %>%
+  spoiler_table("Top IndividualIdentifier", trim = Inf)
+```
+
+
+```{r, results='asis'}
+inpiFX %>%
+  summarise(Nombre = n(), .by = ApplicantLegalEntity) %>%
+  arrange(desc(Nombre)) %>%
+  head(15) %>%
+  spoiler_table("Top ApplicantLegalEntity", trim = Inf)
+```
+
+
+
+## Stats
+
+`
